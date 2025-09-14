@@ -8,6 +8,17 @@ async function fetchTree(id) {
   return res.json();
 }
 
+async function populateVersions(select) {
+  select.innerHTML = '';
+  const versions = await fetchVersions();
+  versions.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = `${v.label}`;
+    select.appendChild(opt);
+  });
+}
+
 function renderTree(node, container) {
   const ul = document.createElement('ul');
   for (const item of node) {
@@ -27,13 +38,7 @@ function renderTree(node, container) {
 
 async function init() {
   const versionSelect = document.getElementById('version');
-  const versions = await fetchVersions();
-  versions.forEach(v => {
-    const opt = document.createElement('option');
-    opt.value = v.id;
-    opt.textContent = `${v.label}`;
-    versionSelect.appendChild(opt);
-  });
+  await populateVersions(versionSelect);
   async function loadTree() {
     const tree = document.getElementById('tree');
     tree.innerHTML = '';
@@ -48,6 +53,18 @@ async function init() {
       const id = versionSelect.value;
       window.location = `/api/export/${id}/${level}`;
     });
+  });
+  document.getElementById('ingest-btn').addEventListener('click', async () => {
+    const url = document.getElementById('gics-url').value;
+    const label = document.getElementById('gics-label').value;
+    const eff = document.getElementById('gics-eff').value;
+    await fetch('/api/ingest-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url, label: label, effective_date: eff })
+    });
+    await populateVersions(versionSelect);
+    await loadTree();
   });
 }
 

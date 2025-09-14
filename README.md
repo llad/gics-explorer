@@ -13,6 +13,11 @@ make dev
 
 Visit http://localhost:8000 to browse.
 
+### Ingest via URL
+
+The web UI lets you add a new GICS version by URL. Enter the Excel file URL,
+label, and effective date then click **Ingest** to download and process it.
+
 ## Load from Excel
 
 To ingest an official GICS Structure workbook:
