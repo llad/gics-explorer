@@ -13,6 +13,16 @@ make dev
 
 Visit http://localhost:8000 to browse.
 
+## Load from Excel
+
+To ingest an official GICS Structure workbook:
+
+```bash
+python scripts/seed.py --excel path/to/gics.xlsx --label 2024-08 --effective 2024-08-01 [--source-url URL]
+```
+
+This creates a new `gics_version` and populates all hierarchy levels.
+
 ## Deployment
 
 App platforms like DigitalOcean expect both a build step and a start command.
