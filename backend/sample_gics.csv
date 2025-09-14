@@ -1,0 +1,5 @@
+sector_code,sector_name,group_code,group_name,industry_code,industry_name,sub_code,sub_name,definition
+10,Energy,1010,Energy Equipment & Services,101010,Oil & Gas Drilling,10101010,Oil & Gas Drilling,Companies that drill for oil & gas
+10,Energy,1010,Energy Equipment & Services,101020,Oil & Gas Equipment & Services,10102010,Oil & Gas Equipment & Services,Equipment providers
+20,Materials,1510,Materials,151010,Chemicals,15101010,Commodity Chemicals,Basic chemicals
+20,Materials,1510,Materials,151020,Construction Materials,15102010,Construction Materials,Concrete and other

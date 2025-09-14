@@ -1,0 +1,54 @@
+async function fetchVersions() {
+  const res = await fetch('/api/versions');
+  return res.json();
+}
+
+async function fetchTree(id) {
+  const res = await fetch(`/api/tree/${id}`);
+  return res.json();
+}
+
+function renderTree(node, container) {
+  const ul = document.createElement('ul');
+  for (const item of node) {
+    const li = document.createElement('li');
+    li.textContent = `${item.code} - ${item.name}`;
+    if (item.groups) {
+      renderTree(item.groups, li);
+    } else if (item.industries) {
+      renderTree(item.industries, li);
+    } else if (item.subs) {
+      renderTree(item.subs, li);
+    }
+    ul.appendChild(li);
+  }
+  container.appendChild(ul);
+}
+
+async function init() {
+  const versionSelect = document.getElementById('version');
+  const versions = await fetchVersions();
+  versions.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v.id;
+    opt.textContent = `${v.label}`;
+    versionSelect.appendChild(opt);
+  });
+  async function loadTree() {
+    const tree = document.getElementById('tree');
+    tree.innerHTML = '';
+    const data = await fetchTree(versionSelect.value);
+    renderTree(data, tree);
+  }
+  versionSelect.addEventListener('change', loadTree);
+  await loadTree();
+  document.querySelectorAll('button[data-level]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const level = btn.dataset.level;
+      const id = versionSelect.value;
+      window.location = `/api/export/${id}/${level}`;
+    });
+  });
+}
+
+init();
