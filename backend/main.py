@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import csv
+import tempfile
 from io import StringIO
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from .db import get_conn, init_db
-from .ingest import load_sample
+from .ingest import load_from_excel, load_sample
 
 app = FastAPI()
 
@@ -33,6 +36,32 @@ def get_versions() -> list[dict[str, Any]]:
             "SELECT id, label, effective_date FROM gics_version ORDER BY id"
         )
         return [dict(row) for row in cur.fetchall()]
+
+
+class IngestURL(BaseModel):
+    url: str
+    label: str
+    effective_date: str
+
+
+@app.post("/api/ingest-url")
+def ingest_url(payload: IngestURL) -> dict[str, int]:
+    try:
+        with httpx.Client() as client:
+            resp = client.get(payload.url)
+            resp.raise_for_status()
+    except httpx.HTTPError as exc:  # pragma: no cover - network failure
+        raise HTTPException(status_code=400, detail="download failed") from exc
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(resp.content)
+        tmp_path = Path(tmp.name)
+    try:
+        version_id = load_from_excel(
+            tmp_path, payload.label, payload.effective_date, payload.url
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return {"version_id": version_id}
 
 
 @app.get("/api/tree/{version_id}")
