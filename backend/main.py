@@ -13,11 +13,6 @@ from .db import get_conn, init_db
 from .ingest import load_sample
 
 app = FastAPI()
-app.mount(
-    "/",
-    StaticFiles(directory=Path(__file__).with_name("static"), html=True),
-    name="static",
-)
 
 
 @app.on_event("startup")
@@ -113,3 +108,10 @@ def export_level(version_id: int, level: str):
         writer.writerow([r[c] for c in cols])
     buf.seek(0)
     return StreamingResponse(buf, media_type="text/csv")
+
+
+app.mount(
+    "/",
+    StaticFiles(directory=Path(__file__).with_name("static"), html=True),
+    name="static",
+)
