@@ -54,7 +54,8 @@ async function init() {
       window.location = `/api/export/${id}/${level}`;
     });
   });
-  document.getElementById('ingest-btn').addEventListener('click', async () => {
+  document.getElementById('ingest-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
     const url = document.getElementById('gics-url').value;
     const label = document.getElementById('gics-label').value;
     const eff = document.getElementById('gics-eff').value;
