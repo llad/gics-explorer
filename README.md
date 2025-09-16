@@ -7,11 +7,13 @@ Minimal GICS browser built with FastAPI, SQLite and vanilla JavaScript.
 ```bash
 make venv
 make install
-make seed
 make dev
 ```
 
-Visit http://localhost:8000 to browse.
+On first launch the app downloads and ingests the official GICS structure from
+`https://www.msci.com/documents/1296102/29559863/GICS_structure_and_definitions_effective_close_of_March_17_2023.xlsx`.
+Visit http://localhost:8000 to browse. Use `make seed` if you want to load the
+small sample CSV instead.
 
 ### Ingest via URL
 

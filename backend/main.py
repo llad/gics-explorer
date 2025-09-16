@@ -14,11 +14,47 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .db import get_conn, init_db
-from .ingest import load_from_excel, load_sample
+from .ingest import load_from_excel
 
 app = FastAPI()
 
 logger = logging.getLogger(__name__)
+
+
+DEFAULT_INGEST_URL = (
+    "https://www.msci.com/documents/1296102/29559863/"
+    "GICS_structure_and_definitions_effective_close_of_March_17_2023.xlsx"
+)
+DEFAULT_LABEL = "2023-03-17"
+DEFAULT_EFFECTIVE_DATE = "2023-03-17"
+
+
+def _ingest_workbook_from_url(url: str, label: str, effective_date: str) -> int:
+    logger.info(
+        "Downloading workbook from %s for label=%s (effective=%s)",
+        url,
+        label,
+        effective_date,
+    )
+    with httpx.Client() as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+    logger.info("Downloaded %d bytes from %s", len(resp.content), url)
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(resp.content)
+        tmp_path = Path(tmp.name)
+    logger.debug("Saved temporary workbook to %s", tmp_path)
+    try:
+        version_id = load_from_excel(tmp_path, label, effective_date, url)
+        logger.info(
+            "Workbook ingest completed for label=%s version_id=%s",
+            label,
+            version_id,
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+        logger.debug("Removed temporary workbook %s", tmp_path)
+    return version_id
 
 
 @app.on_event("startup")
@@ -27,9 +63,24 @@ def startup() -> None:
     with get_conn() as conn:
         cur = conn.execute("SELECT COUNT(*) FROM gics_version")
         if cur.fetchone()[0] == 0:
-            load_sample(
-                Path(__file__).with_name("sample_gics.csv"), "sample-1", "2024-08-01"
+            logger.info(
+                "No GICS data found; ingesting default workbook from %s",
+                DEFAULT_INGEST_URL,
             )
+            try:
+                _ingest_workbook_from_url(
+                    DEFAULT_INGEST_URL,
+                    DEFAULT_LABEL,
+                    DEFAULT_EFFECTIVE_DATE,
+                )
+            except httpx.HTTPError:  # pragma: no cover - network failure on startup
+                logger.exception(
+                    "Default ingest failed while downloading %s", DEFAULT_INGEST_URL
+                )
+            except Exception:  # pragma: no cover - unexpected ingest failure
+                logger.exception(
+                    "Default ingest failed for workbook %s", DEFAULT_INGEST_URL
+                )
 
 
 @app.get("/api/versions")
@@ -56,31 +107,12 @@ def ingest_url(payload: IngestURL) -> dict[str, int]:
         payload.effective_date,
     )
     try:
-        with httpx.Client() as client:
-            resp = client.get(payload.url)
-            resp.raise_for_status()
+        version_id = _ingest_workbook_from_url(
+            payload.url, payload.label, payload.effective_date
+        )
     except httpx.HTTPError as exc:  # pragma: no cover - network failure
         logger.exception("Download failed for %s", payload.url)
         raise HTTPException(status_code=400, detail="download failed") from exc
-    logger.info(
-        "Downloaded %d bytes from %s", len(resp.content), payload.url
-    )
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(resp.content)
-        tmp_path = Path(tmp.name)
-    logger.debug("Saved temporary workbook to %s", tmp_path)
-    try:
-        version_id = load_from_excel(
-            tmp_path, payload.label, payload.effective_date, payload.url
-        )
-        logger.info(
-            "Workbook ingest completed for label=%s version_id=%s",
-            payload.label,
-            version_id,
-        )
-    finally:
-        tmp_path.unlink(missing_ok=True)
-        logger.debug("Removed temporary workbook %s", tmp_path)
     return {"version_id": version_id}
 
 
