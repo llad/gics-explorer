@@ -10,23 +10,39 @@ import pandas as pd
 from .db import get_conn
 
 
+logger = logging.getLogger(__name__)
+
+
 def load_sample(
     csv_path: str | Path, label: str = "sample", effective_date: str | None = None
 ) -> int:
     csv_path = Path(csv_path)
     with csv_path.open() as f:
         rows = list(csv.DictReader(f))
+    logger.info(
+        "Loading sample CSV from %s for label=%s (effective=%s)",
+        csv_path,
+        label,
+        effective_date,
+    )
+    logger.info("Parsed %d rows from sample CSV", len(rows))
     with get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO gics_version(label, effective_date) VALUES (?, ?)",
             (label, effective_date),
         )
         version_id = cur.lastrowid
+        inserted_sectors: set[str] = set()
+        inserted_groups: set[str] = set()
+        inserted_industries: set[str] = set()
+        inserted_subs: set[str] = set()
         for r in rows:
             conn.execute(
                 "INSERT OR IGNORE INTO gics_sector(code2, name, version_id) VALUES (?,?,?)",
                 (r["sector_code"], r["sector_name"], version_id),
             )
+            if r["sector_code"] not in inserted_sectors:
+                inserted_sectors.add(r["sector_code"])
             conn.execute(
                 "INSERT OR IGNORE INTO gics_group(code4, name, sector_code2, version_id) VALUES (?,?,?,?)",
                 (
@@ -36,6 +52,8 @@ def load_sample(
                     version_id,
                 ),
             )
+            if r["group_code"] not in inserted_groups:
+                inserted_groups.add(r["group_code"])
             conn.execute(
                 "INSERT OR IGNORE INTO gics_industry(code6, name, group_code4, version_id) VALUES (?,?,?,?)",
                 (
@@ -45,6 +63,8 @@ def load_sample(
                     version_id,
                 ),
             )
+            if r["industry_code"] not in inserted_industries:
+                inserted_industries.add(r["industry_code"])
             conn.execute(
                 "INSERT OR IGNORE INTO gics_sub_industry(code8, name, definition, industry_code6, version_id) VALUES (?,?,?,?,?)",
                 (
@@ -55,6 +75,16 @@ def load_sample(
                     version_id,
                 ),
             )
+            if r["sub_code"] not in inserted_subs:
+                inserted_subs.add(r["sub_code"])
+    logger.info(
+        "Sample ingest completed for version_id=%s (sectors=%d, groups=%d, industries=%d, sub_industries=%d)",
+        version_id,
+        len(inserted_sectors),
+        len(inserted_groups),
+        len(inserted_industries),
+        len(inserted_subs),
+    )
     return version_id
 
 
@@ -185,9 +215,18 @@ def load_from_excel(
     source_url: str | None = None,
 ) -> int:
     xlsx_path = Path(xlsx_path)
+    logger.info(
+        "Loading Excel workbook from %s for label=%s (effective=%s, source_url=%s)",
+        xlsx_path,
+        label,
+        eff_date,
+        source_url,
+    )
     df = pd.read_excel(xlsx_path, sheet_name=0, header=None, dtype=str)
     records = _parse_first_sheet(df)
+    logger.info("Parsed %d candidate rows from workbook", len(records))
     if not records:
+        logger.error("No GICS rows found while ingesting workbook %s", xlsx_path)
         raise ValueError("no GICS rows found in workbook")
     with get_conn() as conn:
         conn.execute("BEGIN")
@@ -270,4 +309,12 @@ def load_from_excel(
                             (sub_code, sub_name, definition, parent_ind, version_id),
                         )
                         inserted_subs.add(sub_code)
+        logger.info(
+            "Ingested workbook into version_id=%s (sectors=%d, groups=%d, industries=%d, sub_industries=%d)",
+            version_id,
+            len(inserted_sectors),
+            len(inserted_groups),
+            len(inserted_industries),
+            len(inserted_subs),
+        )
     return version_id

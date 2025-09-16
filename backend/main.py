@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import tempfile
 from io import StringIO
 from pathlib import Path
@@ -16,6 +17,8 @@ from .db import get_conn, init_db
 from .ingest import load_from_excel, load_sample
 
 app = FastAPI()
+
+logger = logging.getLogger(__name__)
 
 
 @app.on_event("startup")
@@ -46,21 +49,38 @@ class IngestURL(BaseModel):
 
 @app.post("/api/ingest-url")
 def ingest_url(payload: IngestURL) -> dict[str, int]:
+    logger.info(
+        "Received ingest request for url=%s label=%s effective_date=%s",
+        payload.url,
+        payload.label,
+        payload.effective_date,
+    )
     try:
         with httpx.Client() as client:
             resp = client.get(payload.url)
             resp.raise_for_status()
     except httpx.HTTPError as exc:  # pragma: no cover - network failure
+        logger.exception("Download failed for %s", payload.url)
         raise HTTPException(status_code=400, detail="download failed") from exc
+    logger.info(
+        "Downloaded %d bytes from %s", len(resp.content), payload.url
+    )
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
         tmp.write(resp.content)
         tmp_path = Path(tmp.name)
+    logger.debug("Saved temporary workbook to %s", tmp_path)
     try:
         version_id = load_from_excel(
             tmp_path, payload.label, payload.effective_date, payload.url
         )
+        logger.info(
+            "Workbook ingest completed for label=%s version_id=%s",
+            payload.label,
+            version_id,
+        )
     finally:
         tmp_path.unlink(missing_ok=True)
+        logger.debug("Removed temporary workbook %s", tmp_path)
     return {"version_id": version_id}
 
 
