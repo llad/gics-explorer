@@ -116,7 +116,14 @@ def get_tree(version_id: int) -> list[dict[str, Any]]:
                         {
                             "code": ind["code6"],
                             "name": ind["name"],
-                            "subs": [dict(s) for s in subs],
+                            "subs": [
+                                {
+                                    "code": s["code8"],
+                                    "name": s["name"],
+                                    "definition": s["definition"],
+                                }
+                                for s in subs
+                            ],
                         }
                     )
                 group_list.append(
