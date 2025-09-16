@@ -31,7 +31,14 @@ def test_versions_and_tree():
             vid = r.json()[0]["id"]
             r = await client.get(f"/api/tree/{vid}")
             assert r.status_code == 200
-            assert isinstance(r.json(), list)
+            tree = r.json()
+            assert isinstance(tree, list)
+            first_sub = (
+                tree[0]["groups"][0]["industries"][0]["subs"][0]
+            )
+            assert first_sub["code"].isdigit()
+            assert first_sub["name"]
+            assert "definition" in first_sub
 
     asyncio.run(inner())
 
