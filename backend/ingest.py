@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import csv
 import logging
-import re
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 import pandas as pd
 
@@ -15,7 +14,6 @@ def load_sample(
     csv_path: str | Path, label: str = "sample", effective_date: str | None = None
 ) -> int:
     csv_path = Path(csv_path)
-    rows: Iterable[dict[str, str]]
     with csv_path.open() as f:
         rows = list(csv.DictReader(f))
     with get_conn() as conn:
@@ -60,37 +58,124 @@ def load_sample(
     return version_id
 
 
-_COL_PATTERNS = {
-    "sector_code": re.compile(r"sector.*code"),
-    "sector_name": re.compile(r"sector.*name"),
-    "group_code": re.compile(r"group.*code"),
-    "group_name": re.compile(r"group.*name"),
-    "industry_code": re.compile(r"industry.*code"),
-    "industry_name": re.compile(r"industry.*name"),
-    "sub_code": re.compile(r"sub.?industry.*code"),
-    "sub_name": re.compile(r"sub.?industry.*name"),
-    "definition": re.compile(r"definition"),
-}
-
-
-def _norm(col: str) -> str:
-    col = col.strip().lower()
-    col = re.sub(r"[-\s]+", "_", col)
-    return col
-
-
 def _clean(val: str | None) -> str | None:
     if val is None:
         return None
-    val = str(val).strip()
-    return val or None
+    val = str(val).replace("\xa0", " ").strip()
+    if not val:
+        return None
+    lowered = val.lower()
+    if lowered in {"nan", "none"}:
+        return None
+    return val
 
 
 def _pad(val: str | None, length: int) -> str | None:
     val = _clean(val)
     if val is None:
         return None
+    if not val.isdigit():
+        return None
     return val.zfill(length)
+
+
+def _parse_first_sheet(df: pd.DataFrame) -> list[dict[str, Any]]:
+    if df.empty:
+        return []
+
+    df = df.copy()
+    df.columns = list(range(df.shape[1]))
+
+    records: list[dict[str, Any]] = []
+    current: dict[str, str | None] = {
+        "sector_code": None,
+        "sector_name": None,
+        "group_code": None,
+        "group_name": None,
+        "industry_code": None,
+        "industry_name": None,
+    }
+    pending_record: dict[str, Any] | None = None
+    definition_parts: list[str] = []
+
+    for idx in range(len(df)):
+        values = [df.iat[idx, col] if col < df.shape[1] else None for col in range(8)]
+        (
+            sector_code_raw,
+            sector_name_raw,
+            group_code_raw,
+            group_name_raw,
+            industry_code_raw,
+            industry_name_raw,
+            sub_code_raw,
+            text_raw,
+        ) = values
+
+        sector_code = _pad(sector_code_raw, 2)
+        sector_name = _clean(sector_name_raw)
+        if sector_code:
+            current["sector_code"] = sector_code
+            if sector_name:
+                current["sector_name"] = sector_name
+        elif (
+            sector_name
+            and current["sector_code"]
+            and sector_name.lower() not in {"sector"}
+        ):
+            current["sector_name"] = sector_name
+
+        group_code = _pad(group_code_raw, 4)
+        group_name = _clean(group_name_raw)
+        if group_code:
+            current["group_code"] = group_code
+            if group_name:
+                current["group_name"] = group_name
+        elif (
+            group_name
+            and current["group_code"]
+            and group_name.lower() not in {"industry group"}
+        ):
+            current["group_name"] = group_name
+
+        industry_code = _pad(industry_code_raw, 6)
+        industry_name = _clean(industry_name_raw)
+        if industry_code:
+            current["industry_code"] = industry_code
+            if industry_name:
+                current["industry_name"] = industry_name
+        elif (
+            industry_name
+            and current["industry_code"]
+            and industry_name.lower() not in {"industry"}
+        ):
+            current["industry_name"] = industry_name
+
+        sub_code = _pad(sub_code_raw, 8)
+        text = _clean(text_raw)
+
+        if sub_code:
+            if pending_record and definition_parts:
+                pending_record["definition"] = " ".join(definition_parts)
+            definition_parts = []
+            pending_record = {
+                "sector_code": current["sector_code"],
+                "sector_name": current["sector_name"],
+                "group_code": current["group_code"],
+                "group_name": current["group_name"],
+                "industry_code": current["industry_code"],
+                "industry_name": current["industry_name"],
+                "sub_code": sub_code,
+                "sub_name": text,
+                "definition": None,
+            }
+            records.append(pending_record)
+            continue
+
+        if pending_record and text:
+            definition_parts.append(text)
+            pending_record["definition"] = " ".join(definition_parts)
+
+    return records
 
 
 def load_from_excel(
@@ -100,19 +185,10 @@ def load_from_excel(
     source_url: str | None = None,
 ) -> int:
     xlsx_path = Path(xlsx_path)
-    sheets = pd.read_excel(xlsx_path, sheet_name=None, dtype=str)
-    records: list[dict[str, str]] = []
-    for df in sheets.values():
-        df = df.rename(columns=lambda c: _norm(str(c)))
-        rename_map: dict[str, str] = {}
-        for col in list(df.columns):
-            n = col
-            for key, pat in _COL_PATTERNS.items():
-                if key not in rename_map and pat.search(n):
-                    rename_map[col] = key
-                    break
-        df = df.rename(columns=rename_map)
-        records.extend(df.to_dict(orient="records"))
+    df = pd.read_excel(xlsx_path, sheet_name=0, header=None, dtype=str)
+    records = _parse_first_sheet(df)
+    if not records:
+        raise ValueError("no GICS rows found in workbook")
     with get_conn() as conn:
         conn.execute("BEGIN")
         cur = conn.execute(
@@ -120,70 +196,78 @@ def load_from_excel(
             (label, eff_date, source_url),
         )
         version_id = cur.lastrowid
-        seen_sec: set[tuple[str, str]] = set()
-        seen_grp: set[tuple[str, str, str]] = set()
-        seen_ind: set[tuple[str, str, str]] = set()
-        seen_sub: set[tuple[str, str, str]] = set()
+        inserted_sectors: set[str] = set()
+        inserted_groups: set[str] = set()
+        inserted_industries: set[str] = set()
+        inserted_subs: set[str] = set()
         for r in records:
-            sec_code = _pad(r.get("sector_code"), 2)
+            sec_code = r.get("sector_code")
             sec_name = _clean(r.get("sector_name"))
-            if sec_code and sec_name and (sec_code, sec_name) not in seen_sec:
+            if sec_code and sec_name and sec_code not in inserted_sectors:
                 conn.execute(
                     "INSERT OR IGNORE INTO gics_sector(code2, name, version_id) VALUES (?,?,?)",
                     (sec_code, sec_name, version_id),
                 )
-                seen_sec.add((sec_code, sec_name))
+                inserted_sectors.add(sec_code)
 
-            grp_code = _pad(r.get("group_code"), 4)
+            grp_code = r.get("group_code")
             grp_name = _clean(r.get("group_name"))
             if grp_code and grp_name:
-                if not sec_code:
-                    sec_code = _pad(r.get("sector_code"), 2)
-                if not sec_code:
+                parent_sec = r.get("sector_code")
+                if not parent_sec or parent_sec not in inserted_sectors:
                     logging.warning("Skipping group %s due to missing sector", grp_code)
                 else:
-                    key = (grp_code, grp_name, sec_code)
-                    if key not in seen_grp:
+                    if grp_code not in inserted_groups:
                         conn.execute(
                             "INSERT OR IGNORE INTO gics_group(code4, name, sector_code2, version_id) VALUES (?,?,?,?)",
-                            (grp_code, grp_name, sec_code, version_id),
+                            (grp_code, grp_name, parent_sec, version_id),
                         )
-                        seen_grp.add(key)
+                        inserted_groups.add(grp_code)
 
-            ind_code = _pad(r.get("industry_code"), 6)
+            ind_code = r.get("industry_code")
             ind_name = _clean(r.get("industry_name"))
             if ind_code and ind_name:
-                if not grp_code:
-                    grp_code = _pad(r.get("group_code"), 4)
-                if not grp_code:
+                parent_grp = r.get("group_code")
+                parent_sec = r.get("sector_code")
+                if not parent_grp:
                     logging.warning(
                         "Skipping industry %s due to missing group", ind_code
                     )
+                elif parent_grp not in inserted_groups:
+                    logging.warning(
+                        "Skipping industry %s due to missing parent group %s",
+                        ind_code,
+                        parent_grp,
+                    )
                 else:
-                    key = (ind_code, ind_name, grp_code)
-                    if key not in seen_ind:
+                    if ind_code not in inserted_industries:
                         conn.execute(
                             "INSERT OR IGNORE INTO gics_industry(code6, name, group_code4, version_id) VALUES (?,?,?,?)",
-                            (ind_code, ind_name, grp_code, version_id),
+                            (ind_code, ind_name, parent_grp, version_id),
                         )
-                        seen_ind.add(key)
+                        inserted_industries.add(ind_code)
 
-            sub_code = _pad(r.get("sub_code"), 8)
+            sub_code = r.get("sub_code")
             sub_name = _clean(r.get("sub_name"))
             definition = _clean(r.get("definition"))
             if sub_code and sub_name:
-                if not ind_code:
-                    ind_code = _pad(r.get("industry_code"), 6)
-                if not ind_code:
+                parent_ind = r.get("industry_code")
+                parent_grp = r.get("group_code")
+                if not parent_ind:
                     logging.warning(
                         "Skipping sub-industry %s due to missing industry", sub_code
                     )
+                elif parent_ind not in inserted_industries:
+                    logging.warning(
+                        "Skipping sub-industry %s due to missing parent industry %s",
+                        sub_code,
+                        parent_ind,
+                    )
                 else:
-                    key = (sub_code, sub_name, ind_code)
-                    if key not in seen_sub:
+                    if sub_code not in inserted_subs:
                         conn.execute(
                             "INSERT OR IGNORE INTO gics_sub_industry(code8, name, definition, industry_code6, version_id) VALUES (?,?,?,?,?)",
-                            (sub_code, sub_name, definition, ind_code, version_id),
+                            (sub_code, sub_name, definition, parent_ind, version_id),
                         )
-                        seen_sub.add(key)
+                        inserted_subs.add(sub_code)
     return version_id
