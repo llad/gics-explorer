@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import asyncio
 
 import pandas as pd
 import pytest
+
+from pathlib import Path
 
 from backend.db import DB_PATH, get_conn, init_db
 from backend.ingest import load_from_excel, load_sample
@@ -29,22 +29,40 @@ def test_load_sample_inserts_data():
         assert cur.fetchone()[0] == 2
 
 
+def _make_first_sheet(rows: list[list[str | None]]) -> pd.DataFrame:
+    data = [row + [None] * (8 - len(row)) for row in rows]
+    return pd.DataFrame(data)
+
+
 def test_load_excel_happy_path(monkeypatch):
-    df = pd.DataFrame(
-        {
-            "sector code": ["1", "1"],
-            "sector name": ["Energy", "Energy"],
-            "group-code": ["101", "101"],
-            "group name": ["Equip", "Equip"],
-            "industry code": ["10101", "10101"],
-            "industry name": ["Drilling", "Drilling"],
-            "subindustry code": ["1010101", "1010101"],
-            "subindustry name": ["Drill Sub", "Drill Sub"],
-        }
+    df = _make_first_sheet(
+        [
+            [
+                "Sector",
+                None,
+                "Industry Group",
+                None,
+                "Industry",
+                None,
+                "Sub-Industry",
+                None,
+            ],
+            [
+                "1",
+                "Energy",
+                "101",
+                "Equip",
+                "10101",
+                "Drilling",
+                "1010101",
+                "Drill Sub",
+            ],
+            [None, None, None, None, None, None, None, "This is a definition."],
+        ]
     )
 
     def fake_read_excel(*args, **kwargs):
-        return {"Sheet1": df}
+        return df
 
     monkeypatch.setattr(pd, "read_excel", fake_read_excel)
 
@@ -66,24 +84,42 @@ def test_load_excel_happy_path(monkeypatch):
         )
         assert [tuple(r) for r in cur.fetchall()] == [("010101", "Drilling", "0101")]
         cur = conn.execute(
-            "SELECT code8, name, industry_code6 FROM gics_sub_industry WHERE version_id=?",
+            "SELECT code8, name, definition, industry_code6 FROM gics_sub_industry WHERE version_id=?",
             (vid,),
         )
         assert [tuple(r) for r in cur.fetchall()] == [
-            ("01010101", "Drill Sub", "010101")
+            ("01010101", "Drill Sub", "This is a definition.", "010101")
         ]
 
 
 def test_missing_parent(monkeypatch, caplog):
-    df = pd.DataFrame(
-        {
-            "group code": ["202"],
-            "group name": ["No Sector"],
-        }
+    df = _make_first_sheet(
+        [
+            [
+                "Sector",
+                None,
+                "Industry Group",
+                None,
+                "Industry",
+                None,
+                "Sub-Industry",
+                None,
+            ],
+            [
+                None,
+                None,
+                "202",
+                "No Sector",
+                "202010",
+                "Test Industry",
+                "20201010",
+                "Test Sub",
+            ],
+        ]
     )
 
     def fake_read_excel(*args, **kwargs):
-        return {"Sheet1": df}
+        return df
 
     monkeypatch.setattr(pd, "read_excel", fake_read_excel)
 
@@ -97,21 +133,34 @@ def test_missing_parent(monkeypatch, caplog):
 
 
 def test_api_reflects_excel(monkeypatch):
-    df = pd.DataFrame(
-        {
-            "sectorcode": ["1"],
-            "sectorname": ["Energy"],
-            "groupcode": ["101"],
-            "groupname": ["Equip"],
-            "industrycode": ["10101"],
-            "industryname": ["Drilling"],
-            "subindustrycode": ["1010101"],
-            "subindustryname": ["Drill Sub"],
-        }
+    df = _make_first_sheet(
+        [
+            [
+                "Sector",
+                None,
+                "Industry Group",
+                None,
+                "Industry",
+                None,
+                "Sub-Industry",
+                None,
+            ],
+            [
+                "1",
+                "Energy",
+                "101",
+                "Equip",
+                "10101",
+                "Drilling",
+                "1010101",
+                "Drill Sub",
+            ],
+            [None, None, None, None, None, None, None, "Definition"],
+        ]
     )
 
     def fake_read_excel(*args, **kwargs):
-        return {"Sheet1": df}
+        return df
 
     monkeypatch.setattr(pd, "read_excel", fake_read_excel)
     vid = load_from_excel("dummy.xlsx", "2024-10", "2024-10-01")
