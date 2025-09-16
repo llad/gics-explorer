@@ -15,6 +15,14 @@ On first launch the app downloads and ingests the official GICS structure from
 Visit http://localhost:8000 to browse. Use `make seed` if you want to load the
 small sample CSV instead.
 
+## Database storage
+
+The app stores its SQLite database at `/var/lib/gics-explorer/gics.db` so data
+survives application restarts and new deployments. Set the
+`GICS_DB_PATH` environment variable if you need to place the database elsewhere
+(for example when running locally without permission to create `/var/lib`
+directories).
+
 ### Ingest via URL
 
 The web UI lets you add a new GICS version by URL. Enter the Excel file URL,
